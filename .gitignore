@@ -24,6 +24,8 @@ var/
 scripts/test_*.csv
 scripts/output.csv
 scripts/response.json
+scripts/*_sample.txt
+scripts/income_deduction*.csv
 
 # エディタ設定
 .vscode/
