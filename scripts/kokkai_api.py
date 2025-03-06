@@ -7,9 +7,6 @@
 国立国会図書館が提供する国会会議録検索システムのAPIを使用して、
 指定したキーワードと期間に基づいて国会での発言データを取得し、
 CSVファイルに出力します。
-
-XML形式とJSON形式の両方のAPIレスポンスをサポートしています。
-JSON形式を使用する場合は、--format "json" オプションを指定してください。
 """
 
 import argparse
@@ -18,13 +15,12 @@ import json
 import sys
 import time
 import requests
-import xml.etree.ElementTree as ET
 
 
 API_URL = "https://kokkai.ndl.go.jp/api/speech"
 
 
-def fetch_records(keyword, start_date, end_date, format="xml", max_retries=3, retry_delay=2):
+def fetch_records(keyword, start_date, end_date, max_retries=3, retry_delay=2):
     """
     単一キーワードでAPIから発言データを取得し、リストで返す。
     ページングに対応。取得結果は重複は含まないものとする。
@@ -33,9 +29,6 @@ def fetch_records(keyword, start_date, end_date, format="xml", max_retries=3, re
         keyword (str): 検索キーワード
         start_date (str): 検索開始日 (YYYY-MM-DD)
         end_date (str): 検索終了日 (YYYY-MM-DD)
-        format (str): レスポンス形式 ("xml" または "json")
-                     "xml": XML形式でレスポンスを取得（デフォルト）
-                     "json": JSON形式でレスポンスを取得（recordPacking=jsonパラメータを使用）
         max_retries (int): API接続失敗時の最大リトライ回数
         retry_delay (int): リトライ間の待機時間（秒）
         
@@ -54,12 +47,9 @@ def fetch_records(keyword, start_date, end_date, format="xml", max_retries=3, re
             "from": start_date,
             "until": end_date,
             "startRecord": start_record,
-            "maximumRecords": max_records
+            "maximumRecords": max_records,
+            "recordPacking": "json"  # 常にJSON形式で取得
         }
-        
-        # JSON形式を要求する場合はパラメータを追加
-        if format.lower() == "json":
-            params["recordPacking"] = "json"
         
         # リトライロジック
         for retry in range(max_retries):
@@ -80,130 +70,61 @@ def fetch_records(keyword, start_date, end_date, format="xml", max_retries=3, re
             sys.exit(f"APIエラー: ステータスコード {r.status_code}")
         
         try:
-            # レスポンス形式に応じてパース
-            if format.lower() == "json":
-                # JSONをパース
-                try:
-                    data = json.loads(r.text)
-                    
-                    # 総レコード数を取得
-                    total_records = int(data.get("numberOfRecords", 0))
-                    
-                    # レコードがない場合は終了
-                    if total_records == 0:
-                        print(f"キーワード '{keyword}' に一致する結果はありませんでした。")
-                        break
-                    
-                    # レコードを取得
-                    speech_records = data.get("speechRecord", [])
-                    if not speech_records:
-                        break
-                    
-                    # リストでない場合（単一レコードの場合）はリストに変換
-                    if not isinstance(speech_records, list):
-                        speech_records = [speech_records]
-                    
-                    batch_size = len(speech_records)
-                    total_fetched += batch_size
-                    
-                    # 進捗表示
-                    if total_records > max_records:
-                        print(f"  {total_fetched}/{total_records} 件取得中... ({(total_fetched/total_records*100):.1f}%)")
-                    
-                    for speech_rec in speech_records:
-                        # 会議録情報を別途取得して辞書に追加
-                        meeting_record = {}
-                        for tag in ["issueID", "session", "nameOfHouse", "nameOfMeeting", "issue", "date"]:
-                            meeting_record[tag] = speech_rec.get(tag, "")
-                        
-                        speech_rec["meetingRecord"] = meeting_record
-                        records.append(speech_rec)
-                    
-                    # ページング処理
-                    next_position = data.get("nextRecordPosition")
-                    if next_position is None:
-                        break
-                    
-                    next_position_int = int(next_position)
-                    if next_position_int > total_records or next_position_int <= start_record:
-                        break
-                    
-                    # APIに負荷をかけないよう少し待機
-                    if total_records > max_records:
-                        time.sleep(0.5)
-                    
-                    start_record = next_position_int
-                    
-                except json.JSONDecodeError as e:
-                    sys.exit(f"JSONパースに失敗しました: {e}")
-            else:
-                # XMLをパース
-                root = ET.fromstring(r.text)
+            # JSONをパース
+            try:
+                data = json.loads(r.text)
                 
                 # 総レコード数を取得
-                number_of_records_elem = root.find("numberOfRecords")
-                if number_of_records_elem is None:
-                    sys.exit("レスポンスの形式が不正です: numberOfRecordsが見つかりません")
-                
-                total_records = int(number_of_records_elem.text)
+                total_records = int(data.get("numberOfRecords", 0))
                 
                 # レコードがない場合は終了
                 if total_records == 0:
                     print(f"キーワード '{keyword}' に一致する結果はありませんでした。")
                     break
-                    
-                # レコードを取得
-                records_elem = root.find("records")
-                if records_elem is None:
-                    sys.exit("レスポンスの形式が不正です: recordsが見つかりません")
                 
-                record_elems = records_elem.findall("record")
-                if not record_elems:
+                # レコードを取得
+                speech_records = data.get("speechRecord", [])
+                if not speech_records:
                     break
                 
-                batch_size = len(record_elems)
+                # リストでない場合（単一レコードの場合）はリストに変換
+                if not isinstance(speech_records, list):
+                    speech_records = [speech_records]
+                
+                batch_size = len(speech_records)
                 total_fetched += batch_size
                 
                 # 進捗表示
                 if total_records > max_records:
                     print(f"  {total_fetched}/{total_records} 件取得中... ({(total_fetched/total_records*100):.1f}%)")
                 
-                for record_elem in record_elems:
-                    record_data = record_elem.find("recordData")
-                    if record_data is None:
-                        continue
-                        
-                    speech_record = record_data.find("speechRecord")
-                    if speech_record is None:
-                        continue
-                    
-                    # 発言レコードを辞書に変換
-                    speech_dict = {}
-                    for elem in speech_record:
-                        speech_dict[elem.tag] = elem.text or ""
-                    
+                for speech_rec in speech_records:
                     # 会議録情報を別途取得して辞書に追加
                     meeting_record = {}
                     for tag in ["issueID", "session", "nameOfHouse", "nameOfMeeting", "issue", "date"]:
-                        elem = speech_record.find(tag)
-                        if elem is not None:
-                            meeting_record[tag] = elem.text or ""
+                        meeting_record[tag] = speech_rec.get(tag, "")
                     
-                    speech_dict["meetingRecord"] = meeting_record
-                    records.append(speech_dict)
+                    speech_rec["meetingRecord"] = meeting_record
+                    records.append(speech_rec)
                 
                 # ページング処理
-                if start_record + batch_size >= total_records:
+                next_position = data.get("nextRecordPosition")
+                if next_position is None:
                     break
-                    
+                
+                next_position_int = int(next_position)
+                if next_position_int > total_records or next_position_int <= start_record:
+                    break
+                
                 # APIに負荷をかけないよう少し待機
                 if total_records > max_records:
                     time.sleep(0.5)
-                    
-                start_record += max_records
                 
-        except ET.ParseError as e:
-            sys.exit(f"XMLパースに失敗しました: {e}")
+                start_record = next_position_int
+                
+            except json.JSONDecodeError as e:
+                sys.exit(f"JSONパースに失敗しました: {e}")
+                
         except Exception as e:
             sys.exit(f"データ処理中にエラーが発生しました: {e}")
     
@@ -220,8 +141,6 @@ def main():
     parser.add_argument("--end-date", default="2023-12-31", help="検索終了日 (YYYY-MM-DD)")
     parser.add_argument("--output", default="output.csv", help="出力CSVファイル名")
     parser.add_argument("--max-retries", type=int, default=3, help="API接続失敗時の最大リトライ回数")
-    parser.add_argument("--format", choices=["xml", "json"], default="xml", 
-                      help="APIレスポンス形式 (xml または json、デフォルト: xml、jsonの方が処理が高速)")
     
     args = parser.parse_args()
     
@@ -235,9 +154,9 @@ def main():
     
     # 複数キーワードについて個別に検索し、結果を統合（重複はspeechIDで除外）
     for kw in args.keywords:
-        print(f"キーワード '{kw}' で検索中... (形式: {args.format})")
+        print(f"キーワード '{kw}' で検索中...")
         try:
-            recs = fetch_records(kw, args.start_date, args.end_date, args.format, args.max_retries)
+            recs = fetch_records(kw, args.start_date, args.end_date, args.max_retries)
             
             # 重複除外しながらレコードを追加
             for rec in recs:
